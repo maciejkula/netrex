@@ -67,6 +67,82 @@ class BilinearNet(nn.Module):
         return sigm_in + user_bias + item_bias
 
 
+class CensoredBilinearNet(nn.Module):
+
+    def __init__(self, num_users, num_items, embedding_dim):
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+
+        self.user_embeddings = ScaledEmbedding(num_users, embedding_dim)
+        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim)
+        self.user_biases = ZeroEmbedding(num_users, 1)
+        self.item_biases = ZeroEmbedding(num_items, 1)
+
+        self.censoring_item_embeddings = ScaledEmbedding(num_items, embedding_dim)
+        self.censoring_user_biases = ZeroEmbedding(num_users, 1)
+        self.censoring_item_biases = ZeroEmbedding(num_items, 1)
+
+    def forward(self, user_ids, item_ids):
+
+        user_embedding = self.user_embeddings(user_ids).view(-1, self.embedding_dim)
+        item_embedding = self.item_embeddings(item_ids).view(-1, self.embedding_dim)
+
+        censoring_item_embedding = self.censoring_item_embeddings(item_ids).view(-1, self.embedding_dim)
+
+        user_bias = self.user_biases(user_ids).view(-1, 1)
+        item_bias = self.item_biases(item_ids).view(-1, 1)
+
+        censoring_user_bias = self.censoring_user_biases(user_ids).view(-1, 1)
+        censoring_item_bias = self.censoring_item_biases(item_ids).view(-1, 1)
+
+        observed = F.sigmoid(
+            (user_embedding * censoring_item_embedding).sum(1)
+            + censoring_user_bias
+            + censoring_item_bias
+        )
+
+        rating = (user_embedding * item_embedding).sum(1) + user_bias + item_bias
+
+        return observed * rating
+
+
+class MultilayerNet(nn.Module):
+
+    def __init__(self, num_users, num_items, embedding_dim):
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+
+        self.user_embeddings = ScaledEmbedding(num_users, embedding_dim)
+        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim)
+        self.user_biases = ZeroEmbedding(num_users, 1)
+        self.item_biases = ZeroEmbedding(num_items, 1)
+
+        self.fc1 = nn.Linear(embedding_dim * 2, 1)
+        # self.fc2 = nn.Linear(embedding_dim * 4, embedding_dim)
+        # self.fc3 = nn.Linear(embedding_dim, 1)
+
+    def forward(self, user_ids, item_ids):
+
+        user_embedding = self.user_embeddings(user_ids)
+        item_embedding = self.item_embeddings(item_ids)
+
+        user_embedding = user_embedding.view(-1, self.embedding_dim)
+        item_embedding = item_embedding.view(-1, self.embedding_dim)
+
+        user_bias = self.user_biases(user_ids).view(-1, 1)
+        item_bias = self.item_biases(item_ids).view(-1, 1)
+
+        x = torch.cat([user_embedding, item_embedding], 1)
+        # x = F.relu(self.fc1(x))
+        # x = F.relu(self.fc2(x))
+        # x = self.fc3(x)
+        x = self.fc1(x)
+
+        return x + user_bias + item_bias
+
+
 class ImplicitFactorizationModel(object):
 
     def __init__(self,
@@ -77,7 +153,7 @@ class ImplicitFactorizationModel(object):
                  l2=0.0,
                  use_cuda=False):
 
-        assert loss in ('pointwise', 'bpr', 'adaptive')
+        assert loss in ('pointwise', 'bpr', 'adaptive', 'censored_regression')
 
         self._loss = loss
         self._embedding_dim = embedding_dim
@@ -90,7 +166,7 @@ class ImplicitFactorizationModel(object):
         self._num_items = None
         self._net = None
 
-    def _pointwise_loss(self, users, items):
+    def _pointwise_loss(self, users, items, ratings):
 
         negatives = Variable(
             _gpu(
@@ -105,7 +181,7 @@ class ImplicitFactorizationModel(object):
 
         return torch.cat([positives_loss, negatives_loss]).mean()
 
-    def _bpr_loss(self, users, items):
+    def _bpr_loss(self, users, items, ratings):
 
         negatives = Variable(
             _gpu(
@@ -118,7 +194,7 @@ class ImplicitFactorizationModel(object):
         return (1.0 - F.sigmoid(self._net(users, items) -
                                 self._net(users, negatives))).mean()
 
-    def _adaptive_loss(self, users, items):
+    def _adaptive_loss(self, users, items, ratings):
 
         negative_predictions = []
 
@@ -140,24 +216,59 @@ class ImplicitFactorizationModel(object):
                                       positive_prediction
                                       + 1.0, 0.0))
 
-    def _shuffle(self, users, items):
+    def _censored_regression_loss(self, users, items, ratings):
+
+        negatives = Variable(
+            _gpu(
+                torch.from_numpy(np.random.randint(0,
+                                                   self._num_items,
+                                                   len(users))),
+                self._use_cuda)
+        )
+
+        positives_loss = ((self._net(users, items) - ratings) ** 2)
+        negatives_loss = self._net(users, negatives) ** 2
+
+        return torch.cat([positives_loss, negatives_loss]).mean()
+
+    def _shuffle(self, interactions):
+
+        users = interactions.row
+        items = interactions.col
+        ratings = interactions.data
 
         shuffle_indices = np.arange(len(users))
         np.random.shuffle(shuffle_indices)
 
         return (users[shuffle_indices].astype(np.int64),
-                items[shuffle_indices].astype(np.int64))
+                items[shuffle_indices].astype(np.int64),
+                ratings[shuffle_indices].astype(np.float32))
 
     def fit(self, interactions):
 
         self._num_users, self._num_items = interactions.shape
 
-        self._net = _gpu(
-            BilinearNet(self._num_users,
-                        self._num_items,
-                        self._embedding_dim),
-            self._use_cuda
-        )
+        if self._loss == 'censored_regression':
+            self._net = _gpu(
+                CensoredBilinearNet(self._num_users,
+                                    self._num_items,
+                                    self._embedding_dim),
+                self._use_cuda
+            )
+        else:
+            self._net = _gpu(
+                BilinearNet(self._num_users,
+                            self._num_items,
+                            self._embedding_dim),
+                self._use_cuda
+            )
+
+        # self._net = _gpu(
+        #     MultilayerNet(self._num_users,
+        #                   self._num_items,
+        #                   self._embedding_dim),
+        #     self._use_cuda
+        # )
 
         optimizer = optim.Adam(self._net.parameters(), weight_decay=self._l2)
 
@@ -165,10 +276,12 @@ class ImplicitFactorizationModel(object):
             loss_fnc = self._pointwise_loss
         elif self._loss == 'bpr':
             loss_fnc = self._bpr_loss
+        elif self._loss == 'censored_regression':
+            loss_fnc = self._censored_regression_loss
         else:
             loss_fnc = self._adaptive_loss
 
-        users, items = self._shuffle(interactions.row, interactions.col)
+        users, items, ratings = self._shuffle(interactions)
 
         for epoch_num in range(self._n_iter):
 
@@ -176,19 +289,27 @@ class ImplicitFactorizationModel(object):
                                    self._use_cuda)
             item_ids_tensor = _gpu(torch.from_numpy(items),
                                    self._use_cuda)
+            ratings_tensor = _gpu(torch.from_numpy(ratings),
+                                  self._use_cuda)
 
             epoch_loss = 0.0
 
-            for (batch_user, batch_item) in zip(_minibatch(user_ids_tensor,
-                                                           self._batch_size),
-                                                _minibatch(item_ids_tensor,
-                                                           self._batch_size)):
+            for (batch_user,
+                 batch_item,
+                 batch_ratings) in zip(_minibatch(user_ids_tensor,
+                                                  self._batch_size),
+                                       _minibatch(item_ids_tensor,
+                                                  self._batch_size),
+                                       _minibatch(ratings_tensor,
+                                                  self._batch_size)):
+
                 user_var = Variable(batch_user)
                 item_var = Variable(batch_item)
+                ratings_var = Variable(batch_ratings)
 
                 optimizer.zero_grad()
 
-                loss = loss_fnc(user_var, item_var)
+                loss = loss_fnc(user_var, item_var, ratings_var)
                 epoch_loss += loss.data[0]
 
                 loss.backward()
@@ -204,4 +325,4 @@ class ImplicitFactorizationModel(object):
         user_var = Variable(_gpu(user_ids, self._use_cuda))
         item_var = Variable(_gpu(item_ids, self._use_cuda))
 
-        return _cpu(F.sigmoid(self._net(user_var, item_var)).data).numpy().flatten()
+        return _cpu(self._net(user_var, item_var).data).numpy().flatten()
