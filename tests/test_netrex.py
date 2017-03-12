@@ -31,20 +31,24 @@ if __name__ == '__main__':
     # print(auc_score(lfm, test, train).mean())
     # print(mrr_score(lfm, test, train).mean())
 
-    model = ImplicitFactorizationModel(loss='censored_regression',
-                                       n_iter=5,
-                                       embedding_dim=embedding_dim,
-                                       use_cuda=False)
+    for loss in ('truncated_regression', 'adaptive_truncated_regression'):
+        print('Model loss: {}'.format(loss))
+        model = ImplicitFactorizationModel(loss=loss,
+                                           n_iter=5,
+                                           embedding_dim=embedding_dim,
+                                           use_cuda=False)
 
-    model.fit(ratings_train)
+        model.fit(ratings_train)
 
-    print(auc_score(model, test, train).mean())
-    print(mrr_score(model, test, train).mean())
-    print('RMSE:')
-    print(np.sqrt(((model.predict(ratings_test.row, ratings_test.col)
-                    - ratings_test.data) ** 2).mean()))
+        print(auc_score(model, test, train).mean())
+        print(mrr_score(model, test, train).mean())
+        print('RMSE:')
+        print(np.sqrt(((model.predict(ratings_test.row, ratings_test.col, ratings=True)
+                        - ratings_test.data) ** 2).mean()))
 
     for loss in ('pointwise', 'bpr', 'adaptive'):
+        print('Model loss: {}'.format(loss))
+                                            
         model = ImplicitFactorizationModel(loss=loss,
                                            n_iter=5,
                                            embedding_dim=embedding_dim,
