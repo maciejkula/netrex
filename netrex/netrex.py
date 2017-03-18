@@ -1,10 +1,5 @@
 import numpy as np
 
-import scipy.sparse as sp
-import scipy.stats as st
-
-from sklearn.metrics import roc_auc_score
-
 import torch
 
 import torch.nn as nn
@@ -41,15 +36,17 @@ def _minibatch(tensor, batch_size):
 
 class BilinearNet(nn.Module):
 
-    def __init__(self, num_users, num_items, embedding_dim):
+    def __init__(self, num_users, num_items, embedding_dim, sparse=False):
         super().__init__()
 
         self.embedding_dim = embedding_dim
 
-        self.user_embeddings = ScaledEmbedding(num_users, embedding_dim)
-        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim)
-        self.user_biases = ZeroEmbedding(num_users, 1)
-        self.item_biases = ZeroEmbedding(num_items, 1)
+        self.user_embeddings = ScaledEmbedding(num_users, embedding_dim,
+                                               sparse=sparse)
+        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim,
+                                               sparse=sparse)
+        self.user_biases = ZeroEmbedding(num_users, 1, sparse=sparse)
+        self.item_biases = ZeroEmbedding(num_items, 1, sparse=sparse)
 
     def forward(self, user_ids, item_ids):
 
@@ -69,13 +66,15 @@ class BilinearNet(nn.Module):
 
 class TruncatedBilinearNet(nn.Module):
 
-    def __init__(self, num_users, num_items, embedding_dim):
+    def __init__(self, num_users, num_items, embedding_dim, sparse=False):
         super().__init__()
 
         self.embedding_dim = embedding_dim
 
-        self.rating_net = BilinearNet(num_users, num_items, embedding_dim)
-        self.observed_net = BilinearNet(num_users, num_items, embedding_dim)
+        self.rating_net = BilinearNet(num_users, num_items,
+                                      embedding_dim, sparse=sparse)
+        self.observed_net = BilinearNet(num_users, num_items,
+                                        embedding_dim, sparse=sparse)
 
         self.stddev = nn.Embedding(1, 1)
 
@@ -88,42 +87,6 @@ class TruncatedBilinearNet(nn.Module):
         return observed, rating, stddev
 
 
-class MultilayerNet(nn.Module):
-
-    def __init__(self, num_users, num_items, embedding_dim):
-        super().__init__()
-
-        self.embedding_dim = embedding_dim
-
-        self.user_embeddings = ScaledEmbedding(num_users, embedding_dim)
-        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim)
-        self.user_biases = ZeroEmbedding(num_users, 1)
-        self.item_biases = ZeroEmbedding(num_items, 1)
-
-        self.fc1 = nn.Linear(embedding_dim * 2, 1)
-        # self.fc2 = nn.Linear(embedding_dim * 4, embedding_dim)
-        # self.fc3 = nn.Linear(embedding_dim, 1)
-
-    def forward(self, user_ids, item_ids):
-
-        user_embedding = self.user_embeddings(user_ids)
-        item_embedding = self.item_embeddings(item_ids)
-
-        user_embedding = user_embedding.view(-1, self.embedding_dim)
-        item_embedding = item_embedding.view(-1, self.embedding_dim)
-
-        user_bias = self.user_biases(user_ids).view(-1, 1)
-        item_bias = self.item_biases(item_ids).view(-1, 1)
-
-        x = torch.cat([user_embedding, item_embedding], 1)
-        # x = F.relu(self.fc1(x))
-        # x = F.relu(self.fc2(x))
-        # x = self.fc3(x)
-        x = self.fc1(x)
-
-        return x + user_bias + item_bias
-
-
 class ImplicitFactorizationModel(object):
 
     def __init__(self,
@@ -132,12 +95,13 @@ class ImplicitFactorizationModel(object):
                  n_iter=3,
                  batch_size=64,
                  l2=0.0,
-                 use_cuda=False):
+                 use_cuda=False,
+                 sparse=False):
 
         assert loss in ('pointwise', 'bpr',
                         'adaptive',
-                        'truncated_regression',
-                        'adaptive_truncated_regression')
+                        'regression',
+                        'truncated_regression')
 
         self._loss = loss
         self._embedding_dim = embedding_dim
@@ -145,6 +109,7 @@ class ImplicitFactorizationModel(object):
         self._batch_size = batch_size
         self._l2 = l2
         self._use_cuda = use_cuda
+        self._sparse = sparse
 
         self._num_users = None
         self._num_items = None
@@ -200,33 +165,6 @@ class ImplicitFactorizationModel(object):
                                       positive_prediction
                                       + 1.0, 0.0))
 
-    def _adaptive_truncated_regression_loss(self, users, items, ratings):
-
-        negative_predictions = []
-
-        for _ in range(5):
-            negatives = Variable(
-                _gpu(
-                    torch.from_numpy(np.random.randint(0,
-                                                       self._num_items,
-                                                       len(users))),
-                    self._use_cuda)
-            )
-
-            negative_predictions.append(self._net(users, negatives)[0])
-
-        neg_prob, _ = torch.cat(negative_predictions, 1).max(1)
-
-        pos_prob, pos_rating, pos_stddev = self._net(users, items)
-
-        positives_likelihood = (torch.log(pos_prob)
-                                - 0.5 * np.log(2 * np.pi)
-                                - 0.5 * torch.log(pos_stddev ** 2)
-                                - (0.5 * (pos_rating - ratings) ** 2 / (pos_stddev ** 2)))
-        negatives_likelihood = torch.log(1.0 - neg_prob)
-
-        return torch.cat([-positives_likelihood, -negatives_likelihood]).mean()
-
     def _truncated_regression_loss(self, users, items, ratings):
 
         negatives = Variable(
@@ -240,13 +178,19 @@ class ImplicitFactorizationModel(object):
         pos_prob, pos_rating, pos_stddev = self._net(users, items)
 
         positives_likelihood = (torch.log(pos_prob)
-                                - 0.5 * np.log(2 * np.pi)
                                 - 0.5 * torch.log(pos_stddev ** 2)
-                                - (0.5 * (pos_rating - ratings) ** 2 / (pos_stddev ** 2)))
+                                - (0.5 * (pos_rating - ratings) ** 2
+                                   / (pos_stddev ** 2)))
         neg_prob, _, _ = self._net(users, negatives)
         negatives_likelihood = torch.log(1.0 - neg_prob)
 
         return torch.cat([-positives_likelihood, -negatives_likelihood]).mean()
+
+    def _regression_loss(self, users, items, ratings):
+
+        predicted_rating = self._net(users, items)
+
+        return ((ratings - predicted_rating) ** 2).mean()
 
     def _shuffle(self, interactions):
 
@@ -265,44 +209,44 @@ class ImplicitFactorizationModel(object):
 
         self._num_users, self._num_items = interactions.shape
 
-        if self._loss in ('truncated_regression', 'adaptive_truncated_regression'):
+        if self._loss in ('truncated_regression',):
             self._net = _gpu(
                 TruncatedBilinearNet(self._num_users,
                                      self._num_items,
-                                     self._embedding_dim),
+                                     self._embedding_dim,
+                                     sparse=self._sparse),
                 self._use_cuda
             )
         else:
             self._net = _gpu(
                 BilinearNet(self._num_users,
                             self._num_items,
-                            self._embedding_dim),
+                            self._embedding_dim,
+                            sparse=self._sparse),
                 self._use_cuda
             )
 
-        # self._net = _gpu(
-        #     MultilayerNet(self._num_users,
-        #                   self._num_items,
-        #                   self._embedding_dim),
-        #     self._use_cuda
-        # )
-
-        optimizer = optim.Adam(self._net.parameters(), weight_decay=self._l2)
+        if self._sparse:
+            optimizer = optim.Adagrad(self._net.parameters(),
+                                      weight_decay=self._l2)
+        else:
+            optimizer = optim.Adam(self._net.parameters(),
+                                   weight_decay=self._l2)
 
         if self._loss == 'pointwise':
             loss_fnc = self._pointwise_loss
         elif self._loss == 'bpr':
             loss_fnc = self._bpr_loss
+        elif self._loss == 'regression':
+            loss_fnc = self._regression_loss
         elif self._loss == 'truncated_regression':
             loss_fnc = self._truncated_regression_loss
-        elif self._loss == 'adaptive_truncated_regression':
-            loss_fnc = self._adaptive_truncated_regression_loss
         else:
             loss_fnc = self._adaptive_loss
 
-        users, items, ratings = self._shuffle(interactions)
-
         for epoch_num in range(self._n_iter):
+
+            users, items, ratings = self._shuffle(interactions)
 
             user_ids_tensor = _gpu(torch.from_numpy(users),
                                    self._use_cuda)
@@ -339,7 +283,8 @@ class ImplicitFactorizationModel(object):
     def predict(self, user_ids, item_ids, ratings=False):
 
         if ratings:
-            if self._loss not in ('truncated_regression', 'adaptive_truncated_regression'):
+            if self._loss not in ('regression',
+                                  'truncated_regression'):
                 raise ValueError('Ratings can only be returned '
                                  'when the truncated regression loss '
                                  'is used')
@@ -352,7 +297,7 @@ class ImplicitFactorizationModel(object):
 
         out = self._net(user_var, item_var)
 
-        if self._loss in ('truncated_regression', 'adaptive_truncated_regression'):
+        if self._loss in ('truncated_regression',):
             if ratings:
                 return _cpu((out[1]).data).numpy().flatten()
             else:
