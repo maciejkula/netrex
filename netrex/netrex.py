@@ -59,9 +59,9 @@ class BilinearNet(nn.Module):
         user_bias = self.user_biases(user_ids).view(-1, 1)
         item_bias = self.item_biases(item_ids).view(-1, 1)
 
-        sigm_in = (user_embedding * item_embedding).sum(1)
+        dot = (user_embedding * item_embedding).sum(1)
 
-        return sigm_in + user_bias + item_bias
+        return dot + user_bias + item_bias
 
 
 class TruncatedBilinearNet(nn.Module):
@@ -87,7 +87,23 @@ class TruncatedBilinearNet(nn.Module):
         return observed, rating, stddev
 
 
-class ImplicitFactorizationModel(object):
+class FactorizationModel(object):
+    """
+    A number of classic factorization models, implemented in PyTorch.
+
+    Available loss functions:
+    - pointwise logistic
+    - BPR: Rendle's personalized Bayesian ranking
+    - adaptive: a variant of WARP with adaptive selection of negative samples
+    - regression: minimizing the regression loss between true and predicted ratings
+    - truncated_regression: truncated regression model, that jointly models
+                            the likelihood of a rating being given and the value
+                            of the rating itself.
+
+    Performance notes: neural network toolkits do not perform well on sparse tasks
+    like recommendations. To achieve acceptable speed, either use the `sparse` option
+    on a CPU or use CUDA with very big minibatches (1024+).
+    """
 
     def __init__(self,
                  loss='pointwise',
@@ -98,7 +114,8 @@ class ImplicitFactorizationModel(object):
                  use_cuda=False,
                  sparse=False):
 
-        assert loss in ('pointwise', 'bpr',
+        assert loss in ('pointwise',
+                        'bpr',
                         'adaptive',
                         'regression',
                         'truncated_regression')
@@ -205,7 +222,21 @@ class ImplicitFactorizationModel(object):
                 items[shuffle_indices].astype(np.int64),
                 ratings[shuffle_indices].astype(np.float32))
 
-    def fit(self, interactions):
+    def fit(self, interactions, verbose=False):
+        """
+        Fit the model.
+
+        Arguments
+        ---------
+
+        interactions: np.float32 coo_matrix of shape [n_users, n_items]
+             the matrix containing
+             user-item interactions. The entries can be binary
+             (for implicit tasks) or ratings (for regression
+             and truncated regression).
+        verbose: Bool, optional
+             Whether to print epoch loss statistics.
+        """
 
         self._num_users, self._num_items = interactions.shape
 
@@ -281,6 +312,21 @@ class ImplicitFactorizationModel(object):
             print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
 
     def predict(self, user_ids, item_ids, ratings=False):
+        """
+        Compute the recommendation score for user-item pairs.
+
+        Arguments
+        ---------
+
+        user_ids: integer or np.int32 array of shape [n_pairs,]
+             single user id or an array containing the user ids for the user-item pairs for which
+             a prediction is to be computed
+        item_ids: np.int32 array of shape [n_pairs,]
+             an array containing the item ids for the user-item pairs for which
+             a prediction is to be computed.
+        ratings: bool, optional
+             Return predictions on ratings (rather than likelihood of rating)
+        """
 
         if ratings:
             if self._loss not in ('regression',
