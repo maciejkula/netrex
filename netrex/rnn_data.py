@@ -1,4 +1,4 @@
-import itertools
+
 import zipfile
 
 import numpy as np
@@ -14,8 +14,7 @@ def _read_raw_data(path):
     """
 
     with zipfile.ZipFile(path) as datafile:
-        return (datafile.read('ml-100k/ua.base').decode().split('\n'),
-                datafile.read('ml-100k/ua.test').decode().split('\n'))
+        return datafile.read('ml-100k/u.data').decode().split('\n')
 
 
 def _parse(data):
@@ -30,14 +29,13 @@ def _parse(data):
         yield uid, iid, rating, timestamp
 
 
-def _get_dimensions(train_data, test_data):
+def _get_dimensions(data):
 
     uids = set()
     iids = set()
     timestamps = set()
 
-    for uid, iid, _, timestamp in itertools.chain(train_data,
-                                                  test_data):
+    for uid, iid, _, timestamp in data:
         uids.add(uid)
         iids.add(iid)
         timestamps.add(timestamp)
@@ -49,15 +47,31 @@ def _get_dimensions(train_data, test_data):
     return rows, cols, timestamps
 
 
-def _build_interaction_matrix(rows, cols, data, min_rating):
+def _build_interaction_matrices(rows, cols, data, min_rating):
 
-    mat = sp.lil_matrix((rows, cols), dtype=np.int32)
+    train_mat = sp.lil_matrix((rows, cols), dtype=np.int32)
+    test_mat = sp.lil_matrix((rows, cols), dtype=np.int32)
+
+    uids_in_test = set()
+    uids_in_train = set()
 
     for uid, iid, rating, timestamp in data:
+
+        if uid not in uids_in_test and uid not in uids_in_train:
+            if np.random.random() < 0.2:
+                uids_in_test.add(uid)
+            else:
+                uids_in_train.add(uid)
+
+            if uid in uids_in_test:
+                mat = test_mat
+            else:
+                mat = train_mat
+
         if rating >= min_rating:
             mat[uid, timestamp] = iid
 
-    return mat.tocoo()
+    return train_mat, test_mat
 
 
 def fetch_movielens(data_home=None, indicator_features=True, genre_features=False,
@@ -119,26 +133,16 @@ def fetch_movielens(data_home=None, indicator_features=True, genre_features=Fals
                                 download_if_missing)
 
     # Load raw data
-    train_raw, test_raw = _read_raw_data(zip_path)
+    raw = _read_raw_data(zip_path)
 
     # Figure out the dimensions
-    num_users, _, max_timestamp = _get_dimensions(_parse(train_raw),
-                                                  _parse(test_raw))
+    num_users, _, max_timestamp = _get_dimensions(_parse(raw))
 
-    # Load train interactions
-    train = _build_interaction_matrix(num_users,
-                                      max_timestamp,
-                                      _parse(train_raw),
-                                      min_rating)
-    # Load test interactions
-    test = _build_interaction_matrix(num_users,
-                                     max_timestamp,
-                                     _parse(test_raw),
-                                     min_rating)
-
-    assert train.shape == test.shape
-
-    data = {'train': train,
-            'test': test}
+    train, test = _build_interaction_matrices(num_users,
+                                              max_timestamp,
+                                              _parse(raw),
+                                              min_rating)
+    data = {'train': train.tocsr(),
+            'test': test.tocsr()}
 
     return data

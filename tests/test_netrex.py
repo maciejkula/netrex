@@ -2,7 +2,7 @@ import argparse
 
 import numpy as np
 
-from netrex.netrex import FactorizationModel, generate_sequences
+from netrex.netrex import FactorizationModel, SequenceModel, generate_sequences
 from netrex.evaluation import auc_score, mrr_score
 from netrex import rnn_data
 
@@ -23,7 +23,8 @@ if __name__ == '__main__':
     sparse = args.sparse
 
     sequence_data = rnn_data.fetch_movielens()
-    sequences, targets = generate_sequences(sequence_data['train'])
+    train_sequences, train_targets = generate_sequences(sequence_data['train'])
+    test_sequences, test_targets = generate_sequences(sequence_data['test'])
 
     def _binarize(dataset):
 
@@ -39,26 +40,35 @@ if __name__ == '__main__':
     ratings_train, ratings_test = movielens['train'], movielens['test']
     train, test = _binarize(movielens['train']), _binarize(movielens['test'])
 
-    embedding_dim = 64
-    minibatch_size = 4096
-    n_iter = 5
+    embedding_dim = 128
+    minibatch_size = 64
+    n_iter = 20
 
     # lfm = LightFM(no_components=embedding_dim, loss='bpr')
     # lfm.fit(train, epochs=5)
     # print(auc_score(lfm, test, train).mean())
     # print(mrr_score(lfm, test, train).mean())
 
+    for representation in ('pool', 'lstm'):
+        for loss in ('pointwise', 'bpr', 'adaptive'):
+            print('Model loss: {}, repr: {}'.format(loss, representation))
+
+            model = SequenceModel(loss=loss,
+                                  representation='pool',
+                                  n_iter=n_iter,
+                                  embedding_dim=embedding_dim,
+                                  batch_size=minibatch_size,
+                                  use_cuda=cuda,
+                                  sparse=sparse)
+
+            model.fit(train_sequences, train_targets)
+
+            print('MRR on training set')
+            print(model.compute_mrr(train_sequences, train_targets, num_samples=200).mean())
+            print('MRR on test set')
+            print(model.compute_mrr(test_sequences, test_targets, num_samples=200).mean())
+
     l2 = 0.0
-
-    model = FactorizationModel(loss='rnn',
-                               n_iter=n_iter,
-                               l2=l2,
-                               embedding_dim=embedding_dim,
-                               batch_size=minibatch_size,
-                               use_cuda=cuda,
-                               sparse=sparse)
-
-    model.fit(test)
 
     for loss in ('regression', 'truncated_regression'):
         print('Model loss: {}'.format(loss))
