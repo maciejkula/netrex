@@ -34,6 +34,52 @@ def _minibatch(tensor, batch_size):
         yield tensor[i:i + batch_size]
 
 
+def _generate_sequences(interactions, max_sequence_length=5):
+
+    interactions = interactions.tocsr()
+
+    indptr = interactions.indptr
+    data = interactions.data
+
+    for row_num in range(interactions.shape[0]):
+
+        row_data = data[indptr[row_num]:indptr[row_num + 1]]
+
+        if not len(row_data):
+            pass
+
+        for sequence_idx in range(len(row_data)):
+
+            start = max(0, sequence_idx - max_sequence_length)
+            stop = max(0, sequence_idx - 1)
+
+            yield (row_data[start:stop], row_data[sequence_idx])
+
+
+def generate_sequences(interactions, max_sequence_length=20):
+    """
+    Generate padded sequences from a CSR matrix of interactions
+    where columns are timestamps and values are item ids.
+    """
+
+    num_subsequences = sum(1 for x in _generate_sequences(interactions,
+                                                          max_sequence_length))
+
+    sequences = np.zeros((num_subsequences, max_sequence_length), dtype=np.int64)
+    targets = np.zeros(num_subsequences, dtype=np.int64)
+
+    for i, (seq, target) in enumerate(_generate_sequences(interactions,
+                                                          max_sequence_length)):
+
+        if not len(seq):
+            continue
+
+        sequences[i][-len(seq):] = seq
+        targets[i] = target
+
+    return sequences, targets
+
+
 class BilinearNet(nn.Module):
 
     def __init__(self, num_users, num_items, embedding_dim, sparse=False):
@@ -87,6 +133,35 @@ class TruncatedBilinearNet(nn.Module):
         return observed, rating, stddev
 
 
+class LSTMNet(nn.Module):
+
+    def __init__(self, num_users, num_items, embedding_dim, sparse=False):
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+
+        self.item_embeddings = ScaledEmbedding(num_items, embedding_dim,
+                                               sparse=sparse)
+        self.item_biases = ZeroEmbedding(num_items, 1, sparse=sparse)
+
+        self.lstm = nn.LSTM(batch_first=True,
+                            input_size=embedding_dim,
+                            hidden_size=embedding_dim)
+
+    def forward(self, item_sequences, item_ids):
+
+        target_embedding = self.item_embeddings(item_ids)
+
+        _, (user_representation, _) = self.lstm(self.item_embeddings(item_sequences))
+        target_embedding = target_embedding.view(-1, self.embedding_dim)
+
+        target_bias = self.item_biases(item_ids).view(-1, 1)
+
+        dot = (user_representation[0] * target_embedding).sum(1)
+
+        return dot + target_bias
+
+
 class FactorizationModel(object):
     """
     A number of classic factorization models, implemented in PyTorch.
@@ -99,6 +174,7 @@ class FactorizationModel(object):
     - truncated_regression: truncated regression model, that jointly models
                             the likelihood of a rating being given and the value
                             of the rating itself.
+    - rnn: uses LSTMs to predict next element in sequence.
 
     Performance notes: neural network toolkits do not perform well on sparse tasks
     like recommendations. To achieve acceptable speed, either use the `sparse` option
@@ -118,7 +194,8 @@ class FactorizationModel(object):
                         'bpr',
                         'adaptive',
                         'regression',
-                        'truncated_regression')
+                        'truncated_regression',
+                        'rnn')
 
         self._loss = loss
         self._embedding_dim = embedding_dim
@@ -248,6 +325,14 @@ class FactorizationModel(object):
                                      sparse=self._sparse),
                 self._use_cuda
             )
+        elif self._loss == 'rnn':
+            self._net = _gpu(
+                LSTMNet(self._num_users,
+                        self._num_items,
+                        self._embedding_dim,
+                        sparse=self._sparse),
+                self._use_cuda
+            )
         else:
             self._net = _gpu(
                 BilinearNet(self._num_users,
@@ -258,22 +343,28 @@ class FactorizationModel(object):
             )
 
         if self._sparse:
-            optimizer = optim.Adagrad(self._net.parameters(),
-                                      weight_decay=self._l2)
+            self._optimizer = optim.Adagrad(self._net.parameters(),
+                                            weight_decay=self._l2)
         else:
-            optimizer = optim.Adam(self._net.parameters(),
-                                   weight_decay=self._l2)
+            self._optimizer = optim.Adam(self._net.parameters(),
+                                         weight_decay=self._l2)
 
         if self._loss == 'pointwise':
-            loss_fnc = self._pointwise_loss
+            self._loss_fnc = self._pointwise_loss
         elif self._loss == 'bpr':
-            loss_fnc = self._bpr_loss
+            self._loss_fnc = self._bpr_loss
         elif self._loss == 'regression':
-            loss_fnc = self._regression_loss
+            self._loss_fnc = self._regression_loss
         elif self._loss == 'truncated_regression':
-            loss_fnc = self._truncated_regression_loss
+            self._loss_fnc = self._truncated_regression_loss
+        elif self._loss == 'rnn':
+            self._loss_fnc = self._pointwise_loss
         else:
-            loss_fnc = self._adaptive_loss
+            self._loss_fnc = self._adaptive_loss
+
+        if self._loss == 'rnn':
+            self._fit_rnn(interactions)
+            return
 
         for epoch_num in range(self._n_iter):
 
@@ -301,15 +392,48 @@ class FactorizationModel(object):
                 item_var = Variable(batch_item)
                 ratings_var = Variable(batch_ratings)
 
-                optimizer.zero_grad()
+                self._optimizer.zero_grad()
 
-                loss = loss_fnc(user_var, item_var, ratings_var)
+                loss = self._loss_fnc(user_var, item_var, ratings_var)
                 epoch_loss += loss.data[0]
 
                 loss.backward()
-                optimizer.step()
+                self._optimizer.step()
 
             print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
+
+    def _fit_rnn(self, interactions):
+
+        for epoch_num in range(self._n_iter):
+
+            sequences, targets = generate_sequences(interactions)
+
+            sequences_tensor = _gpu(torch.from_numpy(sequences),
+                                    self._use_cuda)
+            targets_tensor = _gpu(torch.from_numpy(targets),
+                                  self._use_cuda)
+
+            epoch_loss = 0.0
+
+            for (batch_user,
+                 batch_item) in zip(_minibatch(sequences_tensor,
+                                               self._batch_size),
+                                    _minibatch(targets_tensor,
+                                               self._batch_size)):
+
+                user_var = Variable(batch_user)
+                item_var = Variable(batch_item)
+
+                self._optimizer.zero_grad()
+
+                loss = self._loss_fnc(user_var, item_var, item_var)
+                epoch_loss += loss.data[0]
+
+                loss.backward()
+                self._optimizer.step()
+
+            print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
+
 
     def predict(self, user_ids, item_ids, ratings=False):
         """

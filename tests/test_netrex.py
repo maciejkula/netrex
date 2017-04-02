@@ -2,8 +2,9 @@ import argparse
 
 import numpy as np
 
-from netrex.netrex import ImplicitFactorizationModel
+from netrex.netrex import FactorizationModel, generate_sequences
 from netrex.evaluation import auc_score, mrr_score
+from netrex import rnn_data
 
 from lightfm.datasets import fetch_movielens
 
@@ -21,6 +22,9 @@ if __name__ == '__main__':
     cuda = args.gpu
     sparse = args.sparse
 
+    sequence_data = rnn_data.fetch_movielens()
+    sequences, targets = generate_sequences(sequence_data['train'])
+
     def _binarize(dataset):
 
         dataset = dataset.copy()
@@ -35,22 +39,35 @@ if __name__ == '__main__':
     ratings_train, ratings_test = movielens['train'], movielens['test']
     train, test = _binarize(movielens['train']), _binarize(movielens['test'])
 
-    embedding_dim = 128
+    embedding_dim = 64
+    minibatch_size = 4096
+    n_iter = 5
 
-    # lfm = LightFM(no_components=embedding_dim, loss='warp')
+    # lfm = LightFM(no_components=embedding_dim, loss='bpr')
     # lfm.fit(train, epochs=5)
     # print(auc_score(lfm, test, train).mean())
     # print(mrr_score(lfm, test, train).mean())
 
     l2 = 0.0
 
+    model = FactorizationModel(loss='rnn',
+                               n_iter=n_iter,
+                               l2=l2,
+                               embedding_dim=embedding_dim,
+                               batch_size=minibatch_size,
+                               use_cuda=cuda,
+                               sparse=sparse)
+
+    model.fit(test)
+
     for loss in ('regression', 'truncated_regression'):
         print('Model loss: {}'.format(loss))
 
-        model = ImplicitFactorizationModel(loss=loss,
-                                           n_iter=20,
+        model = FactorizationModel(loss=loss,
+                                           n_iter=n_iter,
                                            l2=l2,
                                            embedding_dim=embedding_dim,
+                                           batch_size=minibatch_size,
                                            use_cuda=cuda,
                                            sparse=sparse)
 
@@ -67,15 +84,16 @@ if __name__ == '__main__':
 
         print(model.predict(ratings_test.row, ratings_test.col, ratings=True))
 
-    embedding_dim *= 2
+    # embedding_dim *= 2
 
     for loss in ('pointwise', 'bpr', 'adaptive'):
         print('Model loss: {}'.format(loss))
 
-        model = ImplicitFactorizationModel(loss=loss,
+        model = FactorizationModel(loss=loss,
                                            l2=l2,
-                                           n_iter=5,
+                                           n_iter=n_iter,
                                            embedding_dim=embedding_dim,
+                                           batch_size=minibatch_size,
                                            use_cuda=cuda,
                                            sparse=sparse)
 
