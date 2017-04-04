@@ -12,12 +12,6 @@ from torch.autograd import Variable
 from netrex.layers import ScaledEmbedding, ZeroEmbedding
 
 
-def _chunk(arr, n):
-
-    for i in range(0, len(arr), n):
-        yield arr[i:i + n]
-
-
 def _gpu(tensor, gpu=False):
 
     if gpu:
@@ -54,8 +48,8 @@ def _generate_sequences(interactions, max_sequence_length):
         if not len(row_data):
             continue
 
-        for (seq, target) in zip(_chunk(row_data, max_sequence_length),
-                                 _chunk(row_data, max_sequence_length)):
+        for (seq, target) in zip(_minibatch(row_data, max_sequence_length),
+                                 _minibatch(row_data, max_sequence_length)):
 
             yield seq[:-1], target
 
@@ -157,7 +151,9 @@ class LSTMNet(nn.Module):
     def forward(self, item_sequences, item_ids):
 
         target_embedding = self.item_embeddings(item_ids)
-        user_representations, _ = self.lstm(self.item_embeddings(item_sequences))
+        user_representations, _ = self.lstm(
+            self.item_embeddings(item_sequences)
+        )
         target_bias = self.item_biases(item_ids)
 
         dot = (user_representations * target_embedding).sum(2)
@@ -430,7 +426,8 @@ class FactorizationModel(object):
                 loss.backward()
                 optimizer.step()
 
-            print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
+            if verbose:
+                print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
 
     def predict(self, user_ids, item_ids, ratings=False):
         """
@@ -474,6 +471,19 @@ class FactorizationModel(object):
 
 
 class SequenceModel(object):
+    """
+    One-ahead prediction model.
+
+    Can use one of the following user representations:
+    - pool: pooling over previous items
+    - lstm: LSTM over previous items
+    - popularity: always predict the most popular item
+
+    Can use one of the following losses
+    - pointwise
+    - BPR
+    - adaptive
+    """
 
     def __init__(self,
                  loss='pointwise',
@@ -487,10 +497,7 @@ class SequenceModel(object):
 
         assert loss in ('pointwise',
                         'bpr',
-                        'adaptive',
-                        'regression',
-                        'truncated_regression',
-                        'rnn')
+                        'adaptive')
 
         assert representation in ('pool',
                                   'lstm',
@@ -505,7 +512,6 @@ class SequenceModel(object):
         self._use_cuda = use_cuda
         self._sparse = sparse
 
-        self._num_users = None
         self._num_items = None
         self._net = None
 
@@ -651,9 +657,16 @@ class SequenceModel(object):
                 loss.backward()
                 optimizer.step()
 
-            print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
+            if verbose:
+                print('Epoch {}: loss {}'.format(epoch_num, epoch_loss))
 
     def compute_mrr(self, sequences, targets, num_samples=20):
+        """
+        Computes the MRR of one-ahead-prediction among
+        a sample of possible candidates.
+
+        Will overestimate true MRR but is a lot faster to compute.
+        """
 
         mask = targets > 0
 
