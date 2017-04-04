@@ -42,19 +42,20 @@ if __name__ == '__main__':
 
     embedding_dim = 128
     minibatch_size = 64
-    n_iter = 20
+    n_iter = 10
 
     # lfm = LightFM(no_components=embedding_dim, loss='bpr')
     # lfm.fit(train, epochs=5)
     # print(auc_score(lfm, test, train).mean())
     # print(mrr_score(lfm, test, train).mean())
 
-    for representation in ('pool', 'lstm'):
-        for loss in ('pointwise', 'bpr', 'adaptive'):
+    for representation in ('popularity', 'pool', 'lstm'):
+        for loss in ('bpr',):
+        # for loss in ('pointwise', 'bpr', 'adaptive'):
             print('Model loss: {}, repr: {}'.format(loss, representation))
 
             model = SequenceModel(loss=loss,
-                                  representation='pool',
+                                  representation=representation,
                                   n_iter=n_iter,
                                   embedding_dim=embedding_dim,
                                   batch_size=minibatch_size,
@@ -69,6 +70,8 @@ if __name__ == '__main__':
             print(model.compute_mrr(test_sequences, test_targets, num_samples=200).mean())
 
     l2 = 0.0
+
+    minibatch_size = 4096
 
     for loss in ('regression', 'truncated_regression'):
         print('Model loss: {}'.format(loss))

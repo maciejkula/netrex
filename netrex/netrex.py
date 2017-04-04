@@ -48,8 +48,6 @@ def _generate_sequences(interactions, max_sequence_length):
         if not len(row_data):
             pass
 
-        # yield row_data[:-1], row_data[1:]
-
         for sequence_idx in range(0, len(row_data), max_sequence_length):
 
             start = max(0, sequence_idx - max_sequence_length)
@@ -189,6 +187,21 @@ class PoolNet(nn.Module):
         dot = (user_representations * target_embedding).sum(2)
 
         return dot + target_bias
+
+
+class PopularityNet(nn.Module):
+
+    def __init__(self, num_items, sparse=False):
+        super().__init__()
+
+        self.item_biases = ZeroEmbedding(num_items, 1, sparse=sparse,
+                                         padding_idx=0)
+
+    def forward(self, item_sequences, item_ids):
+
+        target_bias = self.item_biases(item_ids)
+
+        return target_bias
 
 
 class FactorizationModel(object):
@@ -475,6 +488,10 @@ class SequenceModel(object):
                         'truncated_regression',
                         'rnn')
 
+        assert representation in ('pool',
+                                  'lstm',
+                                  'popularity')
+
         self._loss = loss
         self._representation = representation
         self._embedding_dim = embedding_dim
@@ -573,6 +590,12 @@ class SequenceModel(object):
                 LSTMNet(self._num_items,
                         self._embedding_dim,
                         sparse=self._sparse),
+                self._use_cuda
+            )
+        elif self._representation == 'popularity':
+            self._net = _gpu(
+                PopularityNet(self._num_items,
+                              sparse=self._sparse),
                 self._use_cuda
             )
         else:
