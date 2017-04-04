@@ -12,6 +12,12 @@ from torch.autograd import Variable
 from netrex.layers import ScaledEmbedding, ZeroEmbedding
 
 
+def _chunk(arr, n):
+
+    for i in range(0, len(arr), n):
+        yield arr[i:i + n]
+
+
 def _gpu(tensor, gpu=False):
 
     if gpu:
@@ -46,14 +52,12 @@ def _generate_sequences(interactions, max_sequence_length):
         row_data = data[indptr[row_num]:indptr[row_num + 1]]
 
         if not len(row_data):
-            pass
+            continue
 
-        for sequence_idx in range(0, len(row_data), max_sequence_length):
+        for (seq, target) in zip(_chunk(row_data, max_sequence_length),
+                                 _chunk(row_data, max_sequence_length)):
 
-            start = max(0, sequence_idx - max_sequence_length)
-            stop = max(0, sequence_idx - 1)
-
-            yield (row_data[start:stop], row_data[start:stop + 1])
+            yield seq[:-1], target
 
 
 def generate_sequences(interactions, max_sequence_length=20):
@@ -583,7 +587,8 @@ class SequenceModel(object):
              Whether to print epoch loss statistics.
         """
 
-        self._num_items = int(sequences.max() + 1)
+        self._num_items = max(int(sequences.max() + 1),
+                              int(targets.max() + 1))
 
         if self._representation == 'lstm':
             self._net = _gpu(

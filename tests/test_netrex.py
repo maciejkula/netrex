@@ -1,6 +1,7 @@
 import argparse
 
 import numpy as np
+import scipy.sparse as sp
 
 from netrex.netrex import FactorizationModel, SequenceModel, generate_sequences
 from netrex.evaluation import auc_score, mrr_score
@@ -10,6 +11,11 @@ from lightfm.datasets import fetch_movielens
 
 from lightfm import LightFM
 import lightfm.evaluation
+
+
+def generate_sequential_interactions(sequence_len, num_rows):
+
+    return sp.csr_matrix(np.tile(np.arange(sequence_len) + 1, (num_rows, 1)))
 
 
 if __name__ == '__main__':
@@ -25,6 +31,9 @@ if __name__ == '__main__':
     sequence_data = rnn_data.fetch_movielens()
     train_sequences, train_targets = generate_sequences(sequence_data['train'])
     test_sequences, test_targets = generate_sequences(sequence_data['test'])
+
+    train_sequences, train_targets = generate_sequences(generate_sequential_interactions(20, 10000))
+    test_sequences, test_targets = generate_sequences(generate_sequential_interactions(20, 10000))
 
     def _binarize(dataset):
 
