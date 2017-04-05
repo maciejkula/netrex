@@ -32,8 +32,8 @@ if __name__ == '__main__':
     train_sequences, train_targets = generate_sequences(sequence_data['train'])
     test_sequences, test_targets = generate_sequences(sequence_data['test'])
 
-    train_sequences, train_targets = generate_sequences(generate_sequential_interactions(20, 10000))
-    test_sequences, test_targets = generate_sequences(generate_sequential_interactions(20, 10000))
+    # train_sequences, train_targets = generate_sequences(generate_sequential_interactions(20, 10000))
+    # test_sequences, test_targets = generate_sequences(generate_sequential_interactions(20, 10000))
 
     def _binarize(dataset):
 
@@ -71,7 +71,7 @@ if __name__ == '__main__':
                                   use_cuda=cuda,
                                   sparse=sparse)
 
-            model.fit(train_sequences, train_targets)
+            model.fit(train_sequences, train_targets, verbose=True)
 
             print('MRR on training set')
             print(model.compute_mrr(train_sequences, train_targets, num_samples=200).mean())
@@ -93,7 +93,7 @@ if __name__ == '__main__':
                                            use_cuda=cuda,
                                            sparse=sparse)
 
-        model.fit(ratings_train)
+        model.fit(ratings_train, verbose=True)
 
         print(auc_score(model, test, train).mean())
         print(mrr_score(model, test, train).mean())
@@ -119,7 +119,7 @@ if __name__ == '__main__':
                                            use_cuda=cuda,
                                            sparse=sparse)
 
-        model.fit(train)
+        model.fit(train, verbose=True)
 
         print(auc_score(model, test, train).mean())
         print(mrr_score(model, test, train).mean())

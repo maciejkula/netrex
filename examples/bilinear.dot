@@ -1,0 +1,25 @@
+digraph bilinear {
+
+        rankdir=LR
+	splines=line
+        
+        node [fixedsize=false];
+
+        subgraph embeddings {
+                 node [style=solid, shape=record];
+                 user_embeddings [label="user embeddings"];
+                 item_embeddings [label="item embeddings"];
+        }
+
+        subgraph loss {
+                dot;
+                sigmoid;
+                loss;
+        }
+
+        user_embeddings -> dot;
+        item_embeddings -> dot;
+
+        dot -> sigmoid;
+        sigmoid -> loss;
+}

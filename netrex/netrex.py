@@ -177,8 +177,9 @@ class PoolNet(nn.Module):
     def forward(self, item_sequences, item_ids):
 
         target_embedding = self.item_embeddings(item_ids)
+        seen_embeddings = self.item_embeddings(item_sequences)
         user_representations = torch.cumsum(
-            self.item_embeddings(item_sequences),
+            seen_embeddings,
             1
         )
 

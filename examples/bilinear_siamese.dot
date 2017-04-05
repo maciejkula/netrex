@@ -1,0 +1,43 @@
+digraph bilinear {
+
+        rankdir=LR
+	splines=line
+        
+        node [fixedsize=false];
+
+        subgraph cluster_positive_embeddings {
+                 style=filled;
+                 color=lightgrey;
+                 node [style=filled, shape=record, color=white];
+                 p_user_embeddings [label="user embeddings"];
+                 p_item_embeddings [label="item embeddings"];
+                 label = "Known positive";
+        }
+
+        subgraph cluster_negative_embeddings {
+                 style=filled;
+                 color=lightgrey;
+                 node [style=filled, shape=record, color=white];
+                 n_user_embeddings [label="user embeddings"];
+                 n_item_embeddings [label="item embeddings"];
+                 label = "Sampled negative";
+        }
+
+        subgraph dots {
+                 p_dot [label="dot"];
+                 n_dot [label="dot"];
+        }
+
+        subgraph loss {
+                 loss [label="1.0 - sigmoid(negative_score - positive_score)"];
+        }
+
+
+        p_user_embeddings -> p_dot;
+        p_item_embeddings -> p_dot;                 
+        n_user_embeddings -> n_dot;
+        n_item_embeddings -> n_dot;
+
+        p_dot -> loss;
+        n_dot -> loss;
+}
