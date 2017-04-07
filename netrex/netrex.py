@@ -278,22 +278,21 @@ class FactorizationModel(object):
         return (1.0 - F.sigmoid(self._net(users, items) -
                                 self._net(users, negatives))).mean()
 
-    def _adaptive_loss(self, users, items, ratings):
+    def _adaptive_loss(self, users, items, ratings,
+        n_neg_candidates=5):
+        negatives = Variable(
+            _gpu(
+                torch.from_numpy(
+                    np.random.randint(0, self._num_items,
+                        (len(users), n_neg_candidates))),
+                self._use_cuda)
+        )
+        negative_predictions = self._net(
+            users.repeat(n_neg_candidates, 1).transpose_(0,1),
+            negatives
+            ).view(-1, n_neg_candidates)
 
-        negative_predictions = []
-
-        for _ in range(5):
-            negatives = Variable(
-                _gpu(
-                    torch.from_numpy(np.random.randint(0,
-                                                       self._num_items,
-                                                       len(users))),
-                    self._use_cuda)
-            )
-
-            negative_predictions.append(self._net(users, negatives))
-
-        best_negative_prediction, _ = torch.cat(negative_predictions, 1).max(1)
+        best_negative_prediction, _ = negative_predictions.max(1)
         positive_prediction = self._net(users, items)
 
         return torch.mean(torch.clamp(best_negative_prediction -
@@ -548,11 +547,12 @@ class SequenceModel(object):
         return ((1.0 - F.sigmoid(self._net(users, items) -
                                  self._net(users, negatives))) * mask).mean()
 
-    def _adaptive_loss(self, users, items, ratings):
+    def _adaptive_loss(self, users, items, ratings,
+        n_neg_candidates=5):
 
         negative_predictions = []
 
-        for _ in range(5):
+        for _ in range(n_neg_candidates):
             negatives = Variable(
                 _gpu(
                     torch.from_numpy(np.random.randint(0,
