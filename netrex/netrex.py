@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 import torch.optim as optim
 
-from torch.autograd import Variable
+from torch.autograd import Variable, Function
 
 from netrex.layers import ScaledEmbedding, ZeroEmbedding
 
@@ -78,6 +78,26 @@ def generate_sequences(interactions, max_sequence_length=20):
     return sequences, targets
 
 
+class Sign(Function):
+
+    def forward(self, x):
+        self.save_for_backward(x)
+
+        return x.sign()
+
+    def backward(self, grad_output):
+        x, = self.saved_tensors
+
+        return grad_output * (x.abs() < 1.0).float().abs()
+
+        # return x * (x.abs() < 1.0).float().abs() * grad_output
+
+
+def sign(x):
+
+    return Sign()(x)
+
+
 class BilinearNet(nn.Module):
 
     def __init__(self, num_users, num_items, embedding_dim, sparse=False):
@@ -92,7 +112,25 @@ class BilinearNet(nn.Module):
         self.user_biases = ZeroEmbedding(num_users, 1, sparse=sparse)
         self.item_biases = ZeroEmbedding(num_items, 1, sparse=sparse)
 
+    def _binarize(self, x):
+
+        binarized_x = sign(x)
+        scaling_factor = x.abs().mean(1)
+
+        scaling_factor = scaling_factor.detach()
+
+        return binarized_x, scaling_factor
+
+    def _binary_dot(self, x, y, x_scale, y_scale):
+
+        # dot = F.relu(x * y).sum(1)
+        dot = (x * y).sum(1)
+
+        return dot * x_scale * y_scale
+
     def forward(self, user_ids, item_ids):
+
+        binary = True
 
         user_embedding = self.user_embeddings(user_ids)
         item_embedding = self.item_embeddings(item_ids)
@@ -103,9 +141,21 @@ class BilinearNet(nn.Module):
         user_bias = self.user_biases(user_ids).view(-1, 1)
         item_bias = self.item_biases(item_ids).view(-1, 1)
 
-        dot = (user_embedding * item_embedding).sum(1)
+        if binary:
+            binarized_u, u_scale = self._binarize(user_embedding)
+            binarized_i, i_scale = self._binarize(item_embedding)
 
-        return dot + user_bias + item_bias
+            binary_dot = self._binary_dot(binarized_u,
+                                          binarized_i,
+                                          u_scale,
+                                          i_scale)
+            # print(F.sigmoid(binary_dot))
+            return binary_dot + user_bias + item_bias
+        else:
+
+            dot = (user_embedding * item_embedding).sum(1)
+
+            return dot + user_bias + item_bias
 
 
 class TruncatedBilinearNet(nn.Module):
@@ -288,7 +338,7 @@ class FactorizationModel(object):
                 self._use_cuda)
         )
         negative_predictions = self._net(
-            users.repeat(n_neg_candidates, 1).transpose_(0,1),
+            users.repeat(n_neg_candidates, 1).transpose(0,1),
             negatives
             ).view(-1, n_neg_candidates)
 
@@ -424,6 +474,7 @@ class FactorizationModel(object):
                 epoch_loss += loss.data[0]
 
                 loss.backward()
+                # return loss
                 optimizer.step()
 
             if verbose:

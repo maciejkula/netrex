@@ -49,62 +49,62 @@ if __name__ == '__main__':
     ratings_train, ratings_test = movielens['train'], movielens['test']
     train, test = _binarize(movielens['train']), _binarize(movielens['test'])
 
-    embedding_dim = 128
+    embedding_dim = 256
     minibatch_size = 64
-    n_iter = 10
+    n_iter = 20
 
     # lfm = LightFM(no_components=embedding_dim, loss='bpr')
     # lfm.fit(train, epochs=5)
     # print(auc_score(lfm, test, train).mean())
     # print(mrr_score(lfm, test, train).mean())
 
-    for representation in ('popularity', 'pool', 'lstm'):
-        for loss in ('bpr',):
-        # for loss in ('pointwise', 'bpr', 'adaptive'):
-            print('Model loss: {}, repr: {}'.format(loss, representation))
+    # for representation in ('popularity', 'pool', 'lstm'):
+    #     for loss in ('bpr',):
+    #     # for loss in ('pointwise', 'bpr', 'adaptive'):
+    #         print('Model loss: {}, repr: {}'.format(loss, representation))
 
-            model = SequenceModel(loss=loss,
-                                  representation=representation,
-                                  n_iter=n_iter,
-                                  embedding_dim=embedding_dim,
-                                  batch_size=minibatch_size,
-                                  use_cuda=cuda,
-                                  sparse=sparse)
+    #         model = SequenceModel(loss=loss,
+    #                               representation=representation,
+    #                               n_iter=n_iter,
+    #                               embedding_dim=embedding_dim,
+    #                               batch_size=minibatch_size,
+    #                               use_cuda=cuda,
+    #                               sparse=sparse)
 
-            model.fit(train_sequences, train_targets, verbose=True)
+    #         model.fit(train_sequences, train_targets, verbose=True)
 
-            print('MRR on training set')
-            print(model.compute_mrr(train_sequences, train_targets, num_samples=200).mean())
-            print('MRR on test set')
-            print(model.compute_mrr(test_sequences, test_targets, num_samples=200).mean())
+    #         print('MRR on training set')
+    #         print(model.compute_mrr(train_sequences, train_targets, num_samples=200).mean())
+    #         print('MRR on test set')
+    #         print(model.compute_mrr(test_sequences, test_targets, num_samples=200).mean())
 
     l2 = 0.0
 
     minibatch_size = 4096
 
-    for loss in ('regression', 'truncated_regression'):
-        print('Model loss: {}'.format(loss))
+    # for loss in ('regression', 'truncated_regression'):
+    #     print('Model loss: {}'.format(loss))
 
-        model = FactorizationModel(loss=loss,
-                                           n_iter=n_iter,
-                                           l2=l2,
-                                           embedding_dim=embedding_dim,
-                                           batch_size=minibatch_size,
-                                           use_cuda=cuda,
-                                           sparse=sparse)
+    #     model = FactorizationModel(loss=loss,
+    #                                        n_iter=n_iter,
+    #                                        l2=l2,
+    #                                        embedding_dim=embedding_dim,
+    #                                        batch_size=minibatch_size,
+    #                                        use_cuda=cuda,
+    #                                        sparse=sparse)
 
-        model.fit(ratings_train, verbose=True)
+    #     model.fit(ratings_train, verbose=True)
 
-        print(auc_score(model, test, train).mean())
-        print(mrr_score(model, test, train).mean())
-        print('RMSE:')
-        print(np.sqrt(((model.predict(ratings_test.row, ratings_test.col, ratings=True)
-                        - ratings_test.data) ** 2).mean()))
-        print('RMSE training set:')
-        print(np.sqrt(((model.predict(ratings_train.row, ratings_train.col, ratings=True)
-                        - ratings_train.data) ** 2).mean()))
+    #     print(auc_score(model, test, train).mean())
+    #     print(mrr_score(model, test, train).mean())
+    #     print('RMSE:')
+    #     print(np.sqrt(((model.predict(ratings_test.row, ratings_test.col, ratings=True)
+    #                     - ratings_test.data) ** 2).mean()))
+    #     print('RMSE training set:')
+    #     print(np.sqrt(((model.predict(ratings_train.row, ratings_train.col, ratings=True)
+    #                     - ratings_train.data) ** 2).mean()))
 
-        print(model.predict(ratings_test.row, ratings_test.col, ratings=True))
+    #     print(model.predict(ratings_test.row, ratings_test.col, ratings=True))
 
     # embedding_dim *= 2
 
@@ -119,7 +119,7 @@ if __name__ == '__main__':
                                            use_cuda=cuda,
                                            sparse=sparse)
 
-        model.fit(train, verbose=True)
+        loss = model.fit(train, verbose=True)
 
         print(auc_score(model, test, train).mean())
         print(mrr_score(model, test, train).mean())

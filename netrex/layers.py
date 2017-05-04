@@ -1,10 +1,12 @@
+import numpy as np
+
 import torch.nn as nn
 
 
 class ScaledEmbedding(nn.Embedding):
 
     def reset_parameters(self):
-        self.weight.data.normal_(0, 1.0 / self.embedding_dim)
+        self.weight.data.normal_(0, 1.0 / np.sqrt(self.embedding_dim))
         if self.padding_idx is not None:
             self.weight.data[self.padding_idx].fill_(0)
 
