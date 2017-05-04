@@ -55,24 +55,27 @@ if __name__ == '__main__':
     xnor = args.xnor
 
     from netrex.experiment import movielens
-    train, test, validation = movielens.fetch_movielens(random_seed=42)
+    train, test, validation = movielens.fetch_movielens(random_seed=402)
 
     embedding_dim = 256
     n_iter = 20
     minibatch_size = 4096
-    loss = 'adaptive'
+    loss = 'bpr'
     l2 = 0.0
 
     print('Model loss: {}'.format(loss))
-    hyperparams, _ = optimize(train, test, xnor, iterations=20, loss=loss, random_state=402)
+    hyperparams, _ = optimize(train, test, xnor, iterations=10,
+                              minibatch_size=minibatch_size,
+                              loss=loss, random_state=402)
 
     model = FactorizationModel(loss=loss,
                                xnor=xnor,
                                use_cuda=True,
                                sparse=False,
+                               batch_size=minibatch_size,
                                **hyperparams)
 
     loss = model.fit(train, verbose=True)
 
-    print(auc_score(model, validation, train).mean())
-    print(mrr_score(model, validation, train).mean())
+    print(auc_score(model, validation, train + test).mean())
+    print(mrr_score(model, validation, train + test).mean())
