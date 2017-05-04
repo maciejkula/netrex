@@ -78,19 +78,29 @@ def generate_sequences(interactions, max_sequence_length=20):
     return sequences, targets
 
 
+def binary_dot(x, y):
+
+    x_scale = x.abs().mean(1).detach()
+    y_scale = y.abs().mean(1).detach()
+
+    xnor = sign(x) * sign(y)
+
+    return xnor.sum(1) * x_scale * y_scale
+
+
 class Sign(Function):
 
     def forward(self, x):
+
         self.save_for_backward(x)
 
         return x.sign()
 
     def backward(self, grad_output):
+
         x, = self.saved_tensors
 
         return grad_output * (x.abs() < 1.0).float().abs()
-
-        # return x * (x.abs() < 1.0).float().abs() * grad_output
 
 
 def sign(x):
@@ -112,22 +122,6 @@ class BilinearNet(nn.Module):
         self.user_biases = ZeroEmbedding(num_users, 1, sparse=sparse)
         self.item_biases = ZeroEmbedding(num_items, 1, sparse=sparse)
 
-    def _binarize(self, x):
-
-        binarized_x = sign(x)
-        scaling_factor = x.abs().mean(1)
-
-        scaling_factor = scaling_factor.detach()
-
-        return binarized_x, scaling_factor
-
-    def _binary_dot(self, x, y, x_scale, y_scale):
-
-        # dot = F.relu(x * y).sum(1)
-        dot = (x * y).sum(1)
-
-        return dot * x_scale * y_scale
-
     def forward(self, user_ids, item_ids):
 
         binary = True
@@ -142,15 +136,9 @@ class BilinearNet(nn.Module):
         item_bias = self.item_biases(item_ids).view(-1, 1)
 
         if binary:
-            binarized_u, u_scale = self._binarize(user_embedding)
-            binarized_i, i_scale = self._binarize(item_embedding)
-
-            binary_dot = self._binary_dot(binarized_u,
-                                          binarized_i,
-                                          u_scale,
-                                          i_scale)
-            # print(F.sigmoid(binary_dot))
-            return binary_dot + user_bias + item_bias
+            dot = binary_dot(user_embedding, item_embedding)
+            
+            return dot + user_bias + item_bias
         else:
 
             dot = (user_embedding * item_embedding).sum(1)
