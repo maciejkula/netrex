@@ -28,9 +28,17 @@ if __name__ == '__main__':
     cuda = args.gpu
     sparse = args.sparse
 
+    from netrex.experiment import movielens
+    tr, te, va = movielens.fetch_movielens()
+
     sequence_data = rnn_data.fetch_movielens()
     train_sequences, train_targets = generate_sequences(sequence_data['train'])
     test_sequences, test_targets = generate_sequences(sequence_data['test'])
+
+
+
+
+    
 
     # train_sequences, train_targets = generate_sequences(generate_sequential_interactions(20, 10000))
     # test_sequences, test_targets = generate_sequences(generate_sequential_interactions(20, 10000))
