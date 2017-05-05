@@ -10,6 +10,7 @@ import torch.optim as optim
 from torch.autograd import Variable, Function
 
 from netrex.layers import ScaledEmbedding, ZeroEmbedding
+from netrex.native import get_lib
 
 
 def _gpu(tensor, gpu=False):
@@ -33,6 +34,16 @@ def _minibatch(tensor, batch_size):
     for i in range(0, len(tensor), batch_size):
         yield tensor[i:i + batch_size]
 
+
+def binarize_array(array):
+
+    assert array.shape[1] % 8 == 0
+
+    array = (np.sign(array) > 0.0).astype(np.bool)
+    array = np.packbits(array, axis=1)
+
+    return array
+    
 
 def binary_dot(x, y):
 
@@ -325,3 +336,75 @@ class FactorizationModel(object):
                 return _cpu((out[0]).data).numpy().flatten()
         else:
             return _cpu(out.data).numpy().flatten()
+
+    def get_scorer(self):
+
+        get_param = lambda l: _cpu([x for x in l.parameters()][0]).data.numpy()
+
+        if self._xnor is False:
+            return Scorer(get_param(self._net.user_embeddings),
+                          get_param(self._net.user_biases),
+                          get_param(self._net.item_embeddings),
+                          get_param(self._net.item_biases))
+        else:
+            return XNORScorer(get_param(self._net.user_embeddings),
+                              get_param(self._net.user_biases),
+                              get_param(self._net.item_embeddings),
+                              get_param(self._net.item_biases))
+
+
+class Scorer:
+
+    def __init__(self,
+                 user_vectors,
+                 user_biases,
+                 item_vectors,
+                 item_biases):
+
+        assert item_vectors.shape[1] % 8 == 0
+
+        self._user_vectors = user_vectors
+        self._user_biases = user_biases
+        self._item_vectors = item_vectors
+        self._item_biases = item_biases
+
+        self._lib = get_lib()
+
+    def predict(self, user_id):
+
+        return self._lib.predict_float_256(
+            self._user_vectors[user_id],
+            self._item_vectors,
+            self._user_biases[user_id],
+            self._item_biases)
+
+
+class XNORScorer:
+
+    def __init__(self,
+                 user_vectors,
+                 user_biases,
+                 item_vectors,
+                 item_biases):
+
+        assert item_vectors.shape[1] % 8 == 0
+
+        self._user_norms = np.abs(user_vectors).mean(axis=1)
+        self._item_norms = np.abs(item_vectors).mean(axis=1)
+
+        self._user_vectors = binarize_array(user_vectors)
+        self._user_biases = user_biases
+        self._item_vectors = binarize_array(item_vectors)
+        self._item_biases = item_biases
+
+        self._lib = get_lib()
+
+    def predict(self, user_id):
+
+        return self._lib.predict_xnor_256(
+            self._user_vectors[user_id],
+            self._item_vectors,
+            self._user_biases[user_id],
+            self._item_biases,
+            self._user_norms[user_id],
+            self._item_norms)
