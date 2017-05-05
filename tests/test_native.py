@@ -101,11 +101,3 @@ def test_xnor_scorer():
 
     expected = model.predict(np.repeat(0, len(item_ids)), item_ids)
     assert np.allclose(expected, predictions, atol=0.000001)
-
-
-
-model = _get_model(xnor=True, embedding_dim=2048)
-scorer = model.get_scorer()
-
-model = _get_model(xnor=False, embedding_dim=2048)
-scorer = model.get_scorer()
