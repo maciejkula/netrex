@@ -1,3 +1,4 @@
+import glob
 import os
 
 from cffi import FFI
@@ -10,17 +11,23 @@ class Extension:
     def __init__(self, lib):
 
         self._lib = lib
+        self._ffi = FFI()
+
+    def _cast(self, x):
+
+        return self._ffi.cast('float *', x.ctypes.data)
 
     def predict_float_256(self,
                           user_vector,
                           item_vectors,
                           user_bias,
-                          item_biases):
+                          item_biases,
+                          out=None):
 
-        ffi = FFI()
-        cast = lambda x: ffi.cast('float *', x.ctypes.data)
+        cast = self._cast
 
-        out = np.zeros_like(item_biases)
+        if out is None:
+            out = np.zeros_like(item_biases)
 
         num_items, latent_dim = item_vectors.shape
 
@@ -33,7 +40,7 @@ class Extension:
             num_items,
             latent_dim)
 
-        return out.flatten()
+        return out
 
     def predict_xnor_256(self,
                          user_vector,
@@ -41,12 +48,13 @@ class Extension:
                          user_bias,
                          item_biases,
                          user_norm,
-                         item_norms):
+                         item_norms,
+                         out=None):
 
-        ffi = FFI()
-        cast = lambda x: ffi.cast('float *', x.ctypes.data)
+        cast = self._cast
 
-        out = np.zeros_like(item_biases)
+        if out is None:
+            out = np.zeros_like(item_biases)
 
         num_items, latent_dim = item_vectors.shape
 
@@ -64,7 +72,7 @@ class Extension:
             num_items,
             latent_dim)
 
-        return out.flatten()
+        return out
 
 
 def _build_module():
@@ -90,7 +98,7 @@ def _build_module():
                       intptr_t latent_dim);
     """)
 
-    ffibuilder.compile(verbose=True)
+    ffibuilder.compile(verbose=False)
 
 
 def get_lib():
@@ -99,6 +107,11 @@ def get_lib():
 
     path = os.path.join(
         os.path.dirname(os.path.realpath(__file__)),
-        'libpredict.so')
+        'libpredict*.so')
 
-    return Extension(ffi.dlopen(path))
+    libs = glob.glob(path)
+
+    if not libs:
+        raise Exception('Compiled extension not found under {}'.format(path))
+
+    return Extension(ffi.dlopen(libs[0]))
